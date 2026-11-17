@@ -27,5 +27,11 @@ def calculate(s,l):
     model=make_pipeline(StandardScaler(),Ridge(alpha=1.0));model.fit(x[train][:,col],y[train])
     prediction=model.predict(x[test][:,col]);mae=mean_absolute_error(y[test],prediction)
     baseline=make_pipeline(StandardScaler(),Ridge(alpha=1.0));baseline.fit(x[train],y[train]);full_mae=mean_absolute_error(y[test],baseline.predict(x[test]))
-    l.source_checksum=source_checksum(s)
-    l.evidence={'train_rows':len(train),'holdout_rows':len(test),'seed':42,'selected_mae_n':round(float(mae),3),'full_mae_n':round(float(full_mae),3),'selected_probe_ids':ids,'ranking':[{'probe_id':probes[i].id,'code':probes[i].code,'zone':probes[i].zone,'calibrated':probes[i].calibrated,'mutual_information':round(float(mi[i]),5)}for i in order],'holdout':[{'sweep':rows[i].code,'actual':round(float(y[i]),3),'predicted':round(float(v),3)}for i,v in zip(test,prediction)],'train_sweep_codes':[rows[i].code for i in train],'holdout_sweep_codes':[rows[i].code for i in test],'selected_probe_snapshot':[{'id':p.id,'code':p.code,'zone':p.zone,'x_m':p.x_m,'y_m':p.y_m,'calibrated':p.calibrated} for p in probes if p.id in ids]}
+    checksum=source_checksum(s)
+    from . import version_service as vs
+    version=vs.latest_version(s)
+    l.source_checksum=checksum
+    l.source_version_id=version.id if version else None
+    l.invalid_reason=None
+    l.legacy_basis_missing=False
+    l.evidence={'source_version_seq':version.seq if version else None,'source_version_id':version.id if version else None,'source_checksum':checksum,'train_rows':len(train),'holdout_rows':len(test),'seed':42,'selected_mae_n':round(float(mae),3),'full_mae_n':round(float(full_mae),3),'selected_probe_ids':ids,'ranking':[{'probe_id':probes[i].id,'code':probes[i].code,'zone':probes[i].zone,'calibrated':probes[i].calibrated,'mutual_information':round(float(mi[i]),5)}for i in order],'holdout':[{'sweep':rows[i].code,'actual':round(float(y[i]),3),'predicted':round(float(v),3)}for i,v in zip(test,prediction)],'train_sweep_codes':[rows[i].code for i in train],'holdout_sweep_codes':[rows[i].code for i in test],'selected_probe_snapshot':[{'id':p.id,'code':p.code,'zone':p.zone,'x_m':p.x_m,'y_m':p.y_m,'calibrated':p.calibrated} for p in probes if p.id in ids]}

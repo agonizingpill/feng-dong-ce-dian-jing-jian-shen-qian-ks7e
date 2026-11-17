@@ -13,7 +13,7 @@
 - 风洞试验开车核对：TunnelRun只关联signed布置；开车前检查全部选点的最新签发证书、10–50m/s和−10至20°包线、三项安全联锁；负责人开车保存独立快照，工程师记录试验完结。
 - 布置审签：Layout与Probe通过LayoutProbe双外键关联。负责人必须核对三翼段覆盖、全部标定/启用、通道不超预算和来源校验。超过预算不能保存，缺翼段或未标定不能审签，拒绝不改状态。
 
-标定或扫角变更使未审签布置失效；有计算中的方案暂不能改来源。第一份方案审签后整个试验来源冻结，签后方案不能改点。证据含测点快照、选点真实ID、训练/验证记录编号及来源SHA256，避免已签方案受新输入影响。
+标定或扫角变更使未审签布置失效；有计算中的方案时来源仍可修订，在途计算的迟到结果按来源校验判定失效、不能恢复旧资格。第一份方案审签后整个试验来源冻结，签后方案不能改点。每次来源修订登记不可变来源版本，证据含测点快照、选点真实ID、训练/验证记录编号及来源SHA256，已签方案永久锚定其原始版本，后续试验可复查旧签署。
 
 ## 快速启动
 
@@ -124,3 +124,26 @@ MIT License。
 seed只补基础测点/历史扫角/演示证书，不自动审签或制造合格采样、装夹、回执；按剧本真实操作产生追加数据。重复seed保留人工装夹修订、实际序列、冻结状态、回执和原快照。v1/v2历史证据保留，追加验证在 `../../test-artifacts/gb-1028/v3/`。没有硬件采集接口/实时流/升力反演、自动停机、撤销冻结或真实文档外发；不将人工输入示例解释为真实风洞测试数据。
 
 数据库使用READ COMMITTED，领域状态与父试验行锁继续串行化写入。采集冻结先读取批次再等试验锁，因此冻结汇总必须看到前一持锁事务最新提交的实样；不能沿用MySQL默认REPEATABLE READ在等锁前建立的旧快照。强制持锁2秒的实际并发测试验证：10Pa被重写为99Pa后冻结读到99Pa；完整采集被改成单通道后冻结拒绝，见v3/current-read-race-results.json。
+
+## 来源版本管理（v4）
+
+首份布置审签后扫角与标定锁死，本模块在此约束下补上“来源可修订、依据可复查”的版本化能力，不改写已签方案，互信息与回归规则保持不变。
+
+`SourceVersion`（`version_models.py`）是来源的不可变版本，身份为自增 `seq`，内容校验为来源 `checksum`（SHA256，仅索引不唯一，因为来源可能改回历史状态），并冻结完整 `source_snapshot`：全部 Probe、Sweep 及逐点 Pressure、计数与登记人/时刻。`Layout` 新增 `source_version_id`（计算/签署锚点）、`invalid_reason`（失效原因）、`legacy_basis_missing`（升级遗留缺依据标志）、`basis_snapshot`（审签时独立留存的完整原始依据）。
+
+修订规则（`version_service.py` + `main.py`）：未签期间工程师可继续修订 Probe/Sweep；路由先锁当前来源版本行，再比对修订前后 checksum——内容确实变化才登记新版本并使未签的 ready/failed/invalidated 方案失效（保留旧版本/checksum 锚点供追溯，仅清计算证据），无变化的“空修订”不升版本。`calculating` 在途方案不立即改状态，由 worker 完成时按入队锚定的 checksum/版本与当前值比对，迟到结果一律置为 invalidated（`REASON_STALE_RESULT`），不能恢复旧资格；只有对当前完整版本重算后才恢复可审签资格。首份审签后任何来源修订仍被 409 冻结拦截。
+
+审签与并发：修订与审签都先 `with_for_update` 锁当前来源版本行、再（审签）锁布置行，锁顺序全局一致避免死锁；签名只落在当前完整版本，校验方案锚点版本 id 与 checksum 均等于当前值，并把该版本快照复制进 `Layout.basis_snapshot` 独立留存。已签布置的 evidence（互信息排序、Ridge 回归、训练/留出编号、选点快照）与原规则原样保留。
+
+历史升级：`migrations.run_migrations` 幂等执行——为旧库 `layouts` 补列、`create_all` 建 `source_versions`、对既有来源补登基线版本；升级前未锚定任何版本的旧方案置 `legacy_basis_missing` 并写明 `REASON_LEGACY`，即使 checksum 恰好等于现值也禁止审签（不能拿现值补造），须基于当前来源重算后重新锚定。重复执行不产生重复版本、不覆盖遗留标志。
+
+|接口|权限与动作|
+|---|---|
+|GET /source-versions、/source-versions/{id}|三角色读取；列表不含重快照，详情含冻结依据与锚定布置|
+|PUT /probes/{id}、POST/PUT /sweeps|admin/engineer 修订；未签则按 checksum 升版本并失效依赖，签后冻结|
+|POST /layouts/{id}/recalculate|admin/engineer 对非已签、非计算中方案按当前版本重算|
+|POST /layouts/{id}/sign|仅 admin，校验锚定当前完整版本后冻结依据并签署|
+
+前端新增“来源版本”页（`pages/versions.js`，导航第10页）：版本列表与冻结原始依据、方案状态看板（待算/待重算/待审签/已审签）、每条失效方案的失效原因与“发起重算”按钮；布置审签页展示锚定版本、原始依据完整性与遗留标注，失效时内联重算入口。`store.refresh` 增加 `/source-versions` 拉取。旧六页与三追加页接口不变。
+
+本地验证（SQLite + 假 Redis + 真实 scikit-learn，测试脚本不进仓库）：38 项领域集成测试覆盖版本登记、失效、迟到结果、重算、审签冻结、遗留标注与迁移幂等；旧库升级专项验证无新列旧表的 ALTER 补列与遗留方案；HTTP 端到端覆盖三角色权限、版本接口字段与审计留痕。MySQL 行为（FOR UPDATE、READ COMMITTED）以容器 compose 为准。

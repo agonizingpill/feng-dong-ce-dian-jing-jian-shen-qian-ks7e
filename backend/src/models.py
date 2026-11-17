@@ -42,6 +42,14 @@ class Layout(Base):
     auto_select:Mapped[bool]=mapped_column(Boolean,default=True)
     evidence:Mapped[dict|None]=mapped_column(JSON,nullable=True)
     source_checksum:Mapped[str|None]=mapped_column(String(64),nullable=True)
+    # 计算所依据的来源版本（逻辑外键，历史行可为空表示升级前旧方案）
+    source_version_id:Mapped[int|None]=mapped_column(Integer,nullable=True)
+    # 失效原因（仅 invalidated/failed 时填充），便于页面复查
+    invalid_reason:Mapped[str|None]=mapped_column(String(200),nullable=True)
+    # 升级前遗留、缺少原始依据的旧方案明确标注，禁止用现值补造
+    legacy_basis_missing:Mapped[bool]=mapped_column(Boolean,default=False)
+    # 审签时冻结的完整来源依据快照（与 SourceVersion 内容一致，独立留存）
+    basis_snapshot:Mapped[dict|None]=mapped_column(JSON,nullable=True)
     signed_by:Mapped[str|None]=mapped_column(String(100),nullable=True)
 class LayoutProbe(Base):
     __tablename__='layout_probes'
